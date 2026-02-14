@@ -1,0 +1,176 @@
+--****************************************************
+SCRIPT PURPOSE:- 
+  THE PRIMARY PURPOSE OF THIS SCRIPT IS TO HIGHLIGHT ALL THE TRANSFORMATION THAT I HAVE 
+DONE IN ORDER TO BUILD THE DDL STATMENT OF THE GOLD LAYER 
+IT INVOLVES THE TECHNIQUES/QUERIES THROUGH WICH I DID THE DATA MODELING AND TO GET BUSSINESS INSIGHTS
+--*****************************************************
+
+
+use DataWarehouse
+--doing the data modeling first followed by
+--this is for checkin the duplicates in the silver layer if present by chance 
+select cst_id, COUNT(*) from(
+SELECT ci.[cst_id] 
+      ,ci.[cst_key]
+      ,ci.[cst_first_name]
+      ,ci.[cst_last_name]
+      ,ci.[cst_material_status]
+      ,ci.[cst_gndr]
+      ,ci.[cst_create_date]
+	  ,ca.BDATE
+	  ,ca.GEN
+	  ,la.CNTRY
+  FROM [DataWarehouse].[Silver].[crm_cust_info] as ci
+  Left join silver.erp_cust_AZ12 as ca
+  on ci.cst_key=ca.CID
+  Left join silver.erp_loc_A101 as la
+  on ci.cst_key=la.CID
+  )t
+  group by cst_id 
+  having count(*)>1
+
+  --handling the gender now sicne there are two sources for gender info 
+  --from cst_gndr(crm_cust_info) and gen(from erp)
+  SELECT Distinct
+      ci.[cst_gndr]
+	  ,ca.GEN,
+	CASE
+	  WHEN ci.[cst_gndr] <>'n/a' 
+	  THEN ci.[cst_gndr]
+	  ELSE COALESCE (ca.GEN,'n/a')
+	END AS Gender
+  FROM [DataWarehouse].[Silver].[crm_cust_info] as ci
+  Left join silver.erp_cust_AZ12 as ca
+  on ci.cst_key=ca.CID
+  Left join silver.erp_loc_A101 as la
+  on ci.cst_key=la.CID
+  order by 1,2
+
+--since by analysing the aove query we can see that both the columns values are different 
+--for the same customer id (data integrity issue) so in this case we have to contact
+-- the administrator provided and need to find out which table is correct or ave high priority and then on basisi of that priority 
+--we will handle that issue
+
+
+
+CREATE VIEW gold.dim_customers as 
+SELECT
+	  ROW_NUMBER() over (order by cst_id) as customer_key --this is sorreget key
+      ,ci.[cst_id] as customer_id
+      ,ci.[cst_key] as customer_number
+      ,ci.[cst_first_name] as first_name
+      ,ci.[cst_last_name] as last_name
+	  ,la.CNTRY as country
+      ,ci.[cst_material_status] as material_status
+  ,CASE
+	  WHEN ci.[cst_gndr] <>'n/a' 
+	  THEN ci.[cst_gndr]
+	  ELSE COALESCE (ca.GEN,'n/a')
+	END AS gender
+	  ,ca.BDATE as birth_date
+      ,ci.[cst_create_date] as create_date
+  FROM [DataWarehouse].[Silver].[crm_cust_info] as ci
+	  Left join silver.erp_cust_AZ12 as ca
+	  on ci.cst_key=ca.CID
+
+	  Left join silver.erp_loc_A101 as la
+	  on ci.cst_key=la.CID
+  --this is for product dimension table
+
+select prd_key,count(*) from (
+  SELECT 
+	  pn.[prd_id]
+     ,pn.[cat_id]
+     ,pn.[prd_key]
+     ,pn.[prd_nm]
+     ,pn.[prd_cost]
+     ,pn.[prd_line]
+     ,pn.[prd_start_dt]
+     ,pn.[prd_end_dt]
+	 ,pc.CAT
+	 ,pc.SUBCAT
+	 ,pc.MAINTENANCE
+  FROM [DataWarehouse].[Silver].[crm_prd_info] as pn
+	Left join Silver.erp_px_cat_g1v2 as pc
+	on pn.cat_id=pc.ID
+  where prd_end_dt is null -- since we want to get the current data and want to filter out the historical data
+  )t group by prd_key
+  having count(*)>1
+  --*******************************************
+  --Group up the relevent info together
+  --*******************************************
+
+  SELECT 
+	  pn.[prd_id] as product_id
+     ,pn.[prd_key] as product_number
+     ,pn.[prd_nm] as product_name
+	 ,pn.[cat_id] as category_id
+	 ,pc.CAT as category
+	 ,pc.SUBCAT as sub_category
+	 ,pc.MAINTENANCE as maintenance
+     ,pn.[prd_cost] as cost
+     ,pn.[prd_line] as product_line
+     ,pn.[prd_start_dt] as start_date
+
+  FROM [DataWarehouse].[Silver].[crm_prd_info] as pn
+	Left join Silver.erp_px_cat_g1v2 as pc
+	on pn.cat_id=pc.ID
+  where prd_end_dt is null 
+
+  --since it is a dimension table so we will built the serogant keys for it
+  
+  SELECT 
+	  ROW_NUMBER() over (order by pn.prd_start_dt,pn.prd_key) as product_key,
+	  pn.[prd_id] as product_id
+     ,pn.[prd_key] as product_number
+     ,pn.[prd_nm] as product_name
+	 ,pn.[cat_id] as category_id
+	 ,pc.CAT as category
+	 ,pc.SUBCAT as sub_category
+	 ,pc.MAINTENANCE as maintenance
+     ,pn.[prd_cost] as cost
+     ,pn.[prd_line] as product_line
+     ,pn.[prd_start_dt] as start_date
+
+  FROM [DataWarehouse].[Silver].[crm_prd_info] as pn
+	Left join Silver.erp_px_cat_g1v2 as pc
+	on pn.cat_id=pc.ID
+  where prd_end_dt is null 
+
+--now creating the view
+  CREATE VIEW gold.dim_products as
+  SELECT 
+	  ROW_NUMBER() over (order by pn.prd_start_dt,pn.prd_key) as product_key,
+	  pn.[prd_id] as product_id
+     ,pn.[prd_key] as product_number
+     ,pn.[prd_nm] as product_name
+	 ,pn.[cat_id] as category_id
+	 ,pc.CAT as category
+	 ,pc.SUBCAT as sub_category
+	 ,pc.MAINTENANCE as maintenance
+     ,pn.[prd_cost] as cost
+     ,pn.[prd_line] as product_line
+     ,pn.[prd_start_dt] as start_date
+
+  FROM [DataWarehouse].[Silver].[crm_prd_info] as pn
+	Left join Silver.erp_px_cat_g1v2 as pc
+	on pn.cat_id=pc.ID
+  where prd_end_dt is null
+
+  --this is for the fact table sales details
+  SELECT 
+	   sd.[sls_ord_num] as order_number
+	  ,pr.product_key
+      ,cu.customer_key
+      ,sd.[sls_order_dt] as order_date
+      ,sd.[sls_ship_dt] as shipping_date
+      ,sd.[sls_due_dt] as due_date
+      ,sd.[sls_sales] as sales_amount 
+      ,sd.[sls_quantity] as quantity
+      ,sd.[sls_price] AS price
+  FROM [DataWarehouse].[Silver].[crm_sales_details] as sd
+	left join Gold.dim_products as pr
+	on sd.sls_prd_key =pr.product_number
+
+	left join gold.dim_customers cu
+	on sd.[sls_cust_id]=cu.customer_id
