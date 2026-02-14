@@ -1,0 +1,74 @@
+--***************************************************************
+  SCRIPT PURPOSE:-
+      THE PRIMARY PURPOSE OF THIS SCRIPT IS TO CREATE VIEWS (DIMENSION AND FACTS)
+    WE DID THE DATA MODELING(STAR SCHEMA) IN ORDER TO DO DATA ENRICHMENT TO GET BUSSINESS INSIGHTS
+    FOR OUR DATA WE TRANSFORMED AND TAKE INSIGHTS FROM SILVER LAYER
+  USAGE;-
+      THESE VIEWS CAN BE DIRECTLY USED BY THE ANALYSTS FOR ANALYTICS AND REPORTING PURPOSES
+--*****************************************************************
+
+
+
+
+CREATE VIEW gold.dim_customers as 
+SELECT
+	  ROW_NUMBER() over (order by cst_id) as customer_key --this is sorreget key
+      ,ci.[cst_id] as customer_id
+      ,ci.[cst_key] as customer_number
+      ,ci.[cst_first_name] as first_name
+      ,ci.[cst_last_name] as last_name
+	  ,la.CNTRY as country
+      ,ci.[cst_material_status] as material_status
+  ,CASE
+	  WHEN ci.[cst_gndr] <>'n/a' 
+	  THEN ci.[cst_gndr]
+	  ELSE COALESCE (ca.GEN,'n/a')
+	END AS gender
+	  ,ca.BDATE as birth_date
+      ,ci.[cst_create_date] as create_date
+  FROM [DataWarehouse].[Silver].[crm_cust_info] as ci
+	  Left join silver.erp_cust_AZ12 as ca
+	  on ci.cst_key=ca.CID
+
+	  Left join silver.erp_loc_A101 as la
+	  on ci.cst_key=la.CID
+
+--creating the dimension Product in gold layer:-----
+--now creating the view
+  CREATE VIEW gold.dim_products as
+  SELECT 
+	  ROW_NUMBER() over (order by pn.prd_start_dt,pn.prd_key) as product_key,
+	  pn.[prd_id] as product_id
+     ,pn.[prd_key] as product_number
+     ,pn.[prd_nm] as product_name
+	 ,pn.[cat_id] as category_id
+	 ,pc.CAT as category
+	 ,pc.SUBCAT as sub_category
+	 ,pc.MAINTENANCE as maintenance
+     ,pn.[prd_cost] as cost
+     ,pn.[prd_line] as product_line
+     ,pn.[prd_start_dt] as start_date
+
+  FROM [DataWarehouse].[Silver].[crm_prd_info] as pn
+	Left join Silver.erp_px_cat_g1v2 as pc
+	on pn.cat_id=pc.ID
+  where prd_end_dt is null
+
+ --this one is for the facts table of Sales Details 
+ CREATE VIEW gold.fact_sales as
+   SELECT 
+	   sd.[sls_ord_num] as order_number
+	  ,pr.product_key
+      ,cu.customer_key
+      ,sd.[sls_order_dt] as order_date
+      ,sd.[sls_ship_dt] as shipping_date
+      ,sd.[sls_due_dt] as due_date
+      ,sd.[sls_sales] as sales_amount 
+      ,sd.[sls_quantity] as quantity
+      ,sd.[sls_price] AS price
+  FROM [DataWarehouse].[Silver].[crm_sales_details] as sd
+	left join Gold.dim_products as pr
+	on sd.sls_prd_key =pr.product_number
+
+	left join gold.dim_customers cu
+	on sd.[sls_cust_id]=cu.customer_id
